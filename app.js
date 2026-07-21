@@ -4,6 +4,7 @@ const express = require('express');
 const mysql = require('mysql2');
 const session = require('express-session');
 const flash = require('connect-flash');
+const path = require('path');
 
 const { checkAuthenticated, checkAdmin, checkTeacher, checkStudent } = require('./middleware/auth');
 
@@ -32,7 +33,7 @@ db.connect((err) => {
 });
 
 app.use(express.urlencoded({ extended: false }));
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.use(session({
     secret: process.env.SESSION_SECRET || 'secret',
@@ -43,6 +44,7 @@ app.use(session({
 
 app.use(flash());
 
+app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
 
 // =========================================================
