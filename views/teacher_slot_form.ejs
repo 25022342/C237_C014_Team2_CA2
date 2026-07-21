@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><title>Add Slot - TutorLink</title><link rel='stylesheet' href='/css/app.css'></head>
+<body class='dashboard-page'>
+    <nav class='nav shell'><a class='brand' href='/'><span class='brand-mark'>T</span>TutorLink</a><div class='user-nav'><b class='role-pill teacher-pill'>Teacher</b><span><strong><%= user.full_name %></strong><small><%= user.email %></small></span><a class='button secondary' href='/teacher/slots'>Back to Slots</a></div></nav>
+    <main class='dashboard shell'>
+        <% if (errorMessages && errorMessages.length) { %><div class='alert error'><%= errorMessages.join(' ') %></div><% } %>
+        <section class='form-card' style='max-width: 600px; margin: 40px auto;'>
+            <h2>Create New Slot</h2>
+            <p>Offer your time to students.</p>
+            <form action='/teacher/slots/new' method='POST' class='form-stack'>
+                <label>Subject
+                    <input type='text' name='subject' placeholder='e.g. Mathematics, English' required>
+                </label>
+                <label>Location
+                    <input type='text' name='location' placeholder='e.g. Online, Library Room A' required>
+                </label>
+                <div class='form-row'>
+                    <label>Date
+                        <input type='date' name='slot_date' required>
+                    </label>
+                    <label>Time
+                        <input type='time' name='slot_time' required>
+                    </label>
+                </div>
+                <button class='button primary full' type='submit'>Create Slot</button>
+            </form>
+        </section>
+    </main>
+</body>
+</html>

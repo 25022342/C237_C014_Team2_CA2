@@ -14,7 +14,6 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const REGISTRATION_ROLES = ['student', 'teacher'];
 const DASHBOARDS = {
     admin: '/admin',
     teacher: '/teacher',
@@ -34,49 +33,82 @@ db.connect((error) => {
         console.error('Database connection failed:', error.message);
         return;
     }
-    console.log('Connected to database');
-    
-    const createSessions = `CREATE TABLE IF NOT EXISTS sessions (
-        session_id INT AUTO_INCREMENT PRIMARY KEY,
-        created_by INT NOT NULL,
-        subject VARCHAR(100) NOT NULL,
-        location VARCHAR(150) NOT NULL,
-        session_date DATE NOT NULL,
-        session_time TIME NOT NULL,
-        capacity INT NOT NULL DEFAULT 1,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (created_by) REFERENCES users(id)
-    )`;
-    const createApplications = `CREATE TABLE IF NOT EXISTS teacher_applications (
-        application_id INT AUTO_INCREMENT PRIMARY KEY,
-        session_id INT NOT NULL,
-        teacher_id INT NOT NULL,
-        status ENUM('applied','approved','rejected','withdrawn') DEFAULT 'applied',
-        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-        FOREIGN KEY (teacher_id) REFERENCES users(id)
-    )`;
-    const createBookings = `CREATE TABLE IF NOT EXISTS student_bookings (
-        booking_id INT AUTO_INCREMENT PRIMARY KEY,
-        session_id INT NOT NULL,
-        student_id INT NOT NULL,
-        status ENUM('booked','cancelled') DEFAULT 'booked',
-        booked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-        FOREIGN KEY (student_id) REFERENCES users(id)
-    )`;
+    console.log('Connected to database:', process.env.DB_NAME);
 
-    db.query(createSessions, (err) => {
-        if (err) console.error('Error creating sessions table:', err.message);
-        else {
-            db.query(createApplications, (err) => {
-                if (err) console.error('Error creating teacher_applications table:', err.message);
-            });
-            db.query(createBookings, (err) => {
-                if (err) console.error('Error creating student_bookings table:', err.message);
+    const tables = [
+        `CREATE TABLE IF NOT EXISTS admins (
+            admin_id INT AUTO_INCREMENT PRIMARY KEY,
+            full_name VARCHAR(100) NOT NULL,
+            email VARCHAR(100) NOT NULL UNIQUE,
+            password_hash VARCHAR(255) NOT NULL,
+            phone_number VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+        `CREATE TABLE IF NOT EXISTS students (
+            student_id INT AUTO_INCREMENT PRIMARY KEY,
+            full_name VARCHAR(100) NOT NULL,
+            email VARCHAR(100) NOT NULL UNIQUE,
+            password_hash VARCHAR(255) NOT NULL,
+            phone_number VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+        `CREATE TABLE IF NOT EXISTS teachers (
+            teacher_id INT AUTO_INCREMENT PRIMARY KEY,
+            full_name VARCHAR(100) NOT NULL,
+            email VARCHAR(100) NOT NULL UNIQUE,
+            password_hash VARCHAR(255) NOT NULL,
+            phone_number VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+        `CREATE TABLE IF NOT EXISTS teacher_slots (
+            slot_id INT AUTO_INCREMENT PRIMARY KEY,
+            teacher_id INT NOT NULL,
+            subject VARCHAR(100) NOT NULL,
+            location VARCHAR(100) NOT NULL,
+            slot_date DATE NOT NULL,
+            slot_time TIME NOT NULL,
+            is_available TINYINT(1) DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (teacher_id) REFERENCES teachers(teacher_id) ON DELETE CASCADE
+        )`,
+        `CREATE TABLE IF NOT EXISTS bookings (
+            booking_id INT AUTO_INCREMENT PRIMARY KEY,
+            slot_id INT NOT NULL,
+            student_id INT NOT NULL,
+            education_level VARCHAR(50) NOT NULL,
+            class_size INT NOT NULL,
+            status ENUM('pending', 'approved', 'rejected', 'cancelled') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (slot_id) REFERENCES teacher_slots(slot_id) ON DELETE CASCADE,
+            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
+        )`,
+        `CREATE TABLE IF NOT EXISTS approvals (
+            approval_id INT AUTO_INCREMENT PRIMARY KEY,
+            requested_by_student_id INT,
+            requested_by_teacher_id INT,
+            reviewed_by INT,
+            target_type ENUM('booking', 'slot'),
+            target_id INT NOT NULL,
+            status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at TIMESTAMP NULL,
+            FOREIGN KEY (requested_by_student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+            FOREIGN KEY (requested_by_teacher_id) REFERENCES teachers(teacher_id) ON DELETE CASCADE,
+            FOREIGN KEY (reviewed_by) REFERENCES admins(admin_id) ON DELETE SET NULL
+        )`
+    ];
+
+    let i = 0;
+    function nextTable() {
+        if (i < tables.length) {
+            db.query(tables[i], (err) => {
+                if (err) console.error('Error creating table:', err.message);
+                i++;
+                nextTable();
             });
         }
-    });
+    }
+    nextTable();
 });
 
 app.use(express.urlencoded({ extended: false }));
@@ -108,16 +140,14 @@ function dashboardFor(role) {
 }
 
 function validateRegistration(req, res, next) {
-    const username = (req.body.username || '').trim();
+    const full_name = (req.body.full_name || '').trim();
     const email = (req.body.email || '').trim().toLowerCase();
     const password = req.body.password || '';
-    const address = (req.body.address || '').trim();
-    const contact = (req.body.contact || '').trim();
-    const role = 'student'; // Force role to student
+    const phone_number = (req.body.phone_number || '').trim();
 
-    req.body = { username, email, password, address, contact, role };
+    req.body = { full_name, email, password, phone_number };
 
-    if (!username || !email || !password || !address || !contact) {
+    if (!full_name || !email || !password || !phone_number) {
         req.flash('error', 'All fields are required.');
         req.flash('formData', req.body);
         return res.redirect('/register');
@@ -151,17 +181,14 @@ app.post('/register', validateRegistration, (req, res) => {
     if (req.session.user) {
         return res.redirect(dashboardFor(req.session.user.role));
     }
-    const { username, email, password, address, contact, role } = req.body;
-    const sql = [
-        'INSERT INTO users (username, email, password, address, contact, role)',
-        'VALUES (?, ?, SHA1(?), ?, ?, ?)'
-    ].join(' ');
+    const { full_name, email, password, phone_number } = req.body;
+    const sql = 'INSERT INTO students (full_name, email, password_hash, phone_number) VALUES (?, ?, SHA1(?), ?)';
 
-    db.query(sql, [username, email, password, address, contact, role], (error) => {
+    db.query(sql, [full_name, email, password, phone_number], (error) => {
         if (error) {
             console.error('Registration failed:', error.message);
             const message = error.code === 'ER_DUP_ENTRY'
-                ? 'An account with that email or name already exists.'
+                ? 'An account with that email already exists.'
                 : 'Registration is unavailable right now. Please try again.';
             req.flash('error', message);
             req.flash('formData', req.body);
@@ -189,38 +216,51 @@ app.post('/login', (req, res) => {
         return res.redirect('/login');
     }
 
-    const sql = 'SELECT * FROM users WHERE email = ? AND password = SHA1(?) LIMIT 1';
-    db.query(sql, [email, password], (error, results) => {
-        if (error) {
-            console.error('Login failed:', error.message);
-            req.flash('error', 'Login is unavailable right now. Please try again.');
-            return res.redirect('/login');
-        }
-        if (results.length === 0) {
+    const queries = [
+        { role: 'student', sql: 'SELECT * FROM students WHERE email = ? AND password_hash = SHA1(?) LIMIT 1' },
+        { role: 'teacher', sql: 'SELECT * FROM teachers WHERE email = ? AND password_hash = SHA1(?) LIMIT 1' },
+        { role: 'admin', sql: 'SELECT * FROM admins WHERE email = ? AND password_hash = SHA1(?) LIMIT 1' }
+    ];
+
+    let queryIndex = 0;
+
+    function checkNext() {
+        if (queryIndex >= queries.length) {
             req.flash('error', 'Invalid email or password.');
             return res.redirect('/login');
         }
 
-        const databaseUser = results[0];
-        const role = String(databaseUser.role || '').toLowerCase();
-        if (!DASHBOARDS[role]) {
-            req.flash('error', 'Your account has no valid role. Contact an administrator.');
-            return res.redirect('/login');
-        }
-
-        const { password: passwordHash, ...safeUser } = databaseUser;
-        safeUser.role = role;
-
-        return req.session.regenerate((sessionError) => {
-            if (sessionError) {
-                console.error('Session creation failed:', sessionError.message);
-                return res.status(500).send('Unable to create a login session.');
+        const current = queries[queryIndex];
+        db.query(current.sql, [email, password], (error, results) => {
+            if (error) {
+                console.error('Login failed:', error.message);
+                req.flash('error', 'Login is unavailable right now. Please try again.');
+                return res.redirect('/login');
             }
-            req.session.user = safeUser;
-            req.flash('success', 'Welcome back, ' + safeUser.username + '.');
-            return req.session.save(() => res.redirect(dashboardFor(role)));
+
+            if (results.length > 0) {
+                const databaseUser = results[0];
+                const { password_hash, ...safeUser } = databaseUser;
+                safeUser.role = current.role;
+                safeUser.id = safeUser.student_id || safeUser.teacher_id || safeUser.admin_id;
+                
+                return req.session.regenerate((sessionError) => {
+                    if (sessionError) {
+                        console.error('Session creation failed:', sessionError.message);
+                        return res.status(500).send('Unable to create a login session.');
+                    }
+                    req.session.user = safeUser;
+                    req.flash('success', 'Welcome back, ' + safeUser.full_name + '.');
+                    return req.session.save(() => res.redirect(dashboardFor(current.role)));
+                });
+            }
+
+            queryIndex++;
+            checkNext();
         });
-    });
+    }
+
+    checkNext();
 });
 
 app.get('/dashboard', checkAuthenticated, (req, res) => {
@@ -228,16 +268,16 @@ app.get('/dashboard', checkAuthenticated, (req, res) => {
 });
 
 app.get('/admin', checkAuthenticated, checkAdmin, (req, res) => {
-    const sql = 'SELECT username, email, address, contact, role FROM users ORDER BY role, username';
-    db.query(sql, (error, users) => {
-        if (error) {
-            console.error('Unable to load users:', error.message);
-            return res.render('admin', {
-                users: [],
-                loadError: 'The user directory could not be loaded.'
+    db.query('SELECT *, "Admin" as role FROM admins', (err, admins) => {
+        db.query('SELECT *, "Teacher" as role FROM teachers', (err, teachers) => {
+            db.query('SELECT *, "Student" as role FROM students', (err, students) => {
+                let users = [];
+                if (admins) users = users.concat(admins);
+                if (teachers) users = users.concat(teachers);
+                if (students) users = users.concat(students);
+                res.render('admin', { users, loadError: null });
             });
-        }
-        return res.render('admin', { users, loadError: null });
+        });
     });
 });
 
@@ -249,194 +289,133 @@ app.get('/student', checkAuthenticated, checkStudent, (req, res) => {
     res.render('student');
 });
 
-// --- ADMIN SESSIONS ROUTES ---
+// --- TEACHER SLOTS ROUTES ---
 
-app.get('/admin/sessions', checkAuthenticated, checkAdmin, (req, res) => {
-    const sql = 'SELECT * FROM sessions ORDER BY session_date DESC, session_time DESC';
-    db.query(sql, (error, sessions) => {
+app.get('/teacher/slots', checkAuthenticated, checkTeacher, (req, res) => {
+    const sql = 'SELECT * FROM teacher_slots WHERE teacher_id = ? ORDER BY slot_date, slot_time';
+    db.query(sql, [req.session.user.id], (error, slots) => {
         if (error) {
-            console.error('Failed to load sessions:', error.message);
-            req.flash('error', 'Could not load sessions.');
-            return res.redirect('/admin');
-        }
-        res.render('admin_sessions', { sessions });
-    });
-});
-
-app.get('/admin/sessions/new', checkAuthenticated, checkAdmin, (req, res) => {
-    res.render('admin_session_form', { session: {}, formAction: '/admin/sessions', submitLabel: 'Create Session' });
-});
-
-app.post('/admin/sessions', checkAuthenticated, checkAdmin, (req, res) => {
-    const { subject, location, session_date, session_time, capacity } = req.body;
-    const sql = 'INSERT INTO sessions (created_by, subject, location, session_date, session_time, capacity) VALUES (?, ?, ?, ?, ?, ?)';
-    db.query(sql, [req.session.user.id, subject, location, session_date, session_time, capacity], (error) => {
-        if (error) {
-            console.error('Failed to create session:', error.message);
-            req.flash('error', 'Failed to create session.');
-            return res.redirect('/admin/sessions/new');
-        }
-        req.flash('success', 'Session created successfully.');
-        res.redirect('/admin/sessions');
-    });
-});
-
-app.get('/admin/sessions/:id/edit', checkAuthenticated, checkAdmin, (req, res) => {
-    const sql = 'SELECT * FROM sessions WHERE session_id = ?';
-    db.query(sql, [req.params.id], (error, results) => {
-        if (error || results.length === 0) {
-            req.flash('error', 'Session not found.');
-            return res.redirect('/admin/sessions');
-        }
-        res.render('admin_session_form', { session: results[0], formAction: `/admin/sessions/${req.params.id}`, submitLabel: 'Update Session' });
-    });
-});
-
-app.post('/admin/sessions/:id', checkAuthenticated, checkAdmin, (req, res) => {
-    const { subject, location, session_date, session_time, capacity } = req.body;
-    const sql = 'UPDATE sessions SET subject = ?, location = ?, session_date = ?, session_time = ?, capacity = ? WHERE session_id = ?';
-    db.query(sql, [subject, location, session_date, session_time, capacity, req.params.id], (error) => {
-        if (error) {
-            req.flash('error', 'Failed to update session.');
-            return res.redirect(`/admin/sessions/${req.params.id}/edit`);
-        }
-        req.flash('success', 'Session updated successfully.');
-        res.redirect('/admin/sessions');
-    });
-});
-
-app.post('/admin/sessions/:id/delete', checkAuthenticated, checkAdmin, (req, res) => {
-    const sql = 'DELETE FROM sessions WHERE session_id = ?';
-    db.query(sql, [req.params.id], (error) => {
-        if (error) {
-            req.flash('error', 'Failed to delete session. It may have existing applications or bookings.');
-        } else {
-            req.flash('success', 'Session deleted successfully.');
-        }
-        res.redirect('/admin/sessions');
-    });
-});
-
-// --- TEACHER SESSIONS ROUTES ---
-
-app.get('/teacher/sessions', checkAuthenticated, checkTeacher, (req, res) => {
-    const sql = `
-        SELECT s.*, 
-               (SELECT COUNT(*) FROM teacher_applications ta WHERE ta.session_id = s.session_id AND ta.status = 'approved') as approved_teachers,
-               (SELECT status FROM teacher_applications ta WHERE ta.session_id = s.session_id AND ta.teacher_id = ?) as my_status
-        FROM sessions s
-        ORDER BY s.session_date, s.session_time
-    `;
-    db.query(sql, [req.session.user.id], (error, sessions) => {
-        if (error) {
-            req.flash('error', 'Could not load sessions.');
+            req.flash('error', 'Could not load slots.');
             return res.redirect('/teacher');
         }
-        res.render('teacher_sessions', { sessions });
+        res.render('teacher_slots', { slots });
     });
 });
 
-app.post('/teacher/sessions/:id/apply', checkAuthenticated, checkTeacher, (req, res) => {
-    const sessionId = req.params.id;
-    const teacherId = req.session.user.id;
+app.get('/teacher/slots/new', checkAuthenticated, checkTeacher, (req, res) => {
+    res.render('teacher_slot_form', { slot: {} });
+});
+
+app.post('/teacher/slots/new', checkAuthenticated, checkTeacher, (req, res) => {
+    const { subject, location, slot_date, slot_time } = req.body;
+    const sql = 'INSERT INTO teacher_slots (teacher_id, subject, location, slot_date, slot_time) VALUES (?, ?, ?, ?, ?)';
+    db.query(sql, [req.session.user.id, subject, location, slot_date, slot_time], (error) => {
+        if (error) {
+            req.flash('error', 'Failed to create slot.');
+            return res.redirect('/teacher/slots/new');
+        }
+        req.flash('success', 'Slot created successfully.');
+        res.redirect('/teacher/slots');
+    });
+});
+
+app.post('/teacher/slots/:id/delete', checkAuthenticated, checkTeacher, (req, res) => {
+    const sql = 'DELETE FROM teacher_slots WHERE slot_id = ? AND teacher_id = ?';
+    db.query(sql, [req.params.id, req.session.user.id], (error) => {
+        if (error) req.flash('error', 'Failed to delete slot.');
+        else req.flash('success', 'Slot deleted.');
+        res.redirect('/teacher/slots');
+    });
+});
+
+// --- TEACHER BOOKING APPROVALS ---
+
+app.get('/teacher/bookings', checkAuthenticated, checkTeacher, (req, res) => {
+    const sql = \`
+        SELECT b.*, ts.subject, ts.slot_date, ts.slot_time, s.full_name as student_name, s.email as student_email
+        FROM bookings b
+        JOIN teacher_slots ts ON b.slot_id = ts.slot_id
+        JOIN students s ON b.student_id = s.student_id
+        WHERE ts.teacher_id = ?
+        ORDER BY b.created_at DESC
+    \`;
+    db.query(sql, [req.session.user.id], (error, bookings) => {
+        if (error) {
+            req.flash('error', 'Could not load bookings.');
+            return res.redirect('/teacher');
+        }
+        res.render('teacher_bookings', { bookings });
+    });
+});
+
+app.post('/teacher/bookings/:id/status', checkAuthenticated, checkTeacher, (req, res) => {
+    const { status } = req.body; // 'approved' or 'rejected'
+    if (status !== 'approved' && status !== 'rejected') return res.redirect('/teacher/bookings');
     
-    db.query('SELECT COUNT(*) as count FROM teacher_applications WHERE session_id = ? AND status = "approved"', [sessionId], (err, results) => {
-        if (err) return res.redirect('/teacher/sessions');
+    // Ensure the booking belongs to this teacher's slot
+    const verifySql = 'SELECT ts.teacher_id FROM bookings b JOIN teacher_slots ts ON b.slot_id = ts.slot_id WHERE b.booking_id = ?';
+    db.query(verifySql, [req.params.id], (err, results) => {
+        if (err || results.length === 0 || results[0].teacher_id !== req.session.user.id) {
+            req.flash('error', 'Unauthorized.');
+            return res.redirect('/teacher/bookings');
+        }
         
-        const status = results[0].count === 0 ? 'approved' : 'applied';
-        const sql = 'INSERT INTO teacher_applications (session_id, teacher_id, status) VALUES (?, ?, ?)';
-        
-        db.query(sql, [sessionId, teacherId, status], (error) => {
-            if (error) {
-                if (error.code === 'ER_DUP_ENTRY') req.flash('error', 'You already applied for this session.');
-                else req.flash('error', 'Failed to apply.');
-            } else {
-                req.flash('success', status === 'approved' ? 'You are approved to teach this session!' : 'Application submitted.');
+        const sql = 'UPDATE bookings SET status = ? WHERE booking_id = ?';
+        db.query(sql, [status, req.params.id], (error) => {
+            if (error) req.flash('error', 'Failed to update booking status.');
+            else {
+                req.flash('success', 'Booking marked as ' + status + '.');
+                // Create an approval record for audit trail
+                const approvalSql = 'INSERT INTO approvals (requested_by_student_id, reviewed_by, target_type, target_id, status) SELECT student_id, ?, "booking", ?, ? FROM bookings WHERE booking_id = ?';
+                db.query(approvalSql, [req.session.user.id, req.params.id, status, req.params.id]);
             }
-            res.redirect('/teacher/my-applications');
+            res.redirect('/teacher/bookings');
         });
     });
 });
 
-app.get('/teacher/my-applications', checkAuthenticated, checkTeacher, (req, res) => {
-    const sql = `
-        SELECT ta.*, s.subject, s.location, s.session_date, s.session_time 
-        FROM teacher_applications ta 
-        JOIN sessions s ON ta.session_id = s.session_id 
-        WHERE ta.teacher_id = ?
-        ORDER BY ta.applied_at DESC
-    `;
-    db.query(sql, [req.session.user.id], (error, applications) => {
+// --- STUDENT BOOKING ROUTES ---
+
+app.get('/student/slots', checkAuthenticated, checkStudent, (req, res) => {
+    const sql = \`
+        SELECT ts.*, t.full_name as teacher_name,
+               (SELECT status FROM bookings b WHERE b.slot_id = ts.slot_id AND b.student_id = ?) as my_status
+        FROM teacher_slots ts
+        JOIN teachers t ON ts.teacher_id = t.teacher_id
+        WHERE ts.is_available = 1
+        ORDER BY ts.slot_date, ts.slot_time
+    \`;
+    db.query(sql, [req.session.user.id], (error, slots) => {
         if (error) {
-            req.flash('error', 'Could not load your applications.');
-            return res.redirect('/teacher');
-        }
-        res.render('teacher_applications', { applications });
-    });
-});
-
-app.post('/teacher/applications/:id/optout', checkAuthenticated, checkTeacher, (req, res) => {
-    const sql = 'DELETE FROM teacher_applications WHERE application_id = ? AND teacher_id = ?';
-    db.query(sql, [req.params.id, req.session.user.id], (error) => {
-        if (error) req.flash('error', 'Failed to opt out.');
-        else req.flash('success', 'You have opted out of the session.');
-        res.redirect('/teacher/my-applications');
-    });
-});
-
-// --- STUDENT SESSIONS ROUTES ---
-
-app.get('/student/sessions', checkAuthenticated, checkStudent, (req, res) => {
-    const sql = `
-        SELECT s.*, 
-               (SELECT COUNT(*) FROM student_bookings sb WHERE sb.session_id = s.session_id AND sb.status = 'booked') as booked_count,
-               (SELECT status FROM student_bookings sb WHERE sb.session_id = s.session_id AND sb.student_id = ?) as my_status
-        FROM sessions s
-        ORDER BY s.session_date, s.session_time
-    `;
-    db.query(sql, [req.session.user.id], (error, sessions) => {
-        if (error) {
-            req.flash('error', 'Could not load sessions.');
+            req.flash('error', 'Could not load available slots.');
             return res.redirect('/student');
         }
-        res.render('student_sessions', { sessions });
+        res.render('student_slots', { slots });
     });
 });
 
-app.post('/student/sessions/:id/apply', checkAuthenticated, checkStudent, (req, res) => {
-    const sessionId = req.params.id;
+app.post('/student/slots/:id/book', checkAuthenticated, checkStudent, (req, res) => {
+    const { education_level, class_size } = req.body;
+    const slotId = req.params.id;
     const studentId = req.session.user.id;
     
-    const checkSql = `
-        SELECT s.capacity, 
-               (SELECT COUNT(*) FROM student_bookings sb WHERE sb.session_id = s.session_id AND sb.status = 'booked') as booked_count
-        FROM sessions s WHERE s.session_id = ?
-    `;
-    db.query(checkSql, [sessionId], (err, results) => {
-        if (err || results.length === 0) return res.redirect('/student/sessions');
-        
-        if (results[0].booked_count >= results[0].capacity) {
-            req.flash('error', 'This session is fully booked.');
-            return res.redirect('/student/sessions');
-        }
-        
-        const sql = 'INSERT INTO student_bookings (session_id, student_id, status) VALUES (?, ?, "booked")';
-        db.query(sql, [sessionId, studentId], (error) => {
-            if (error) req.flash('error', 'Failed to book session (you might have already booked).');
-            else req.flash('success', 'Session booked successfully!');
-            res.redirect('/student/my-bookings');
-        });
+    const sql = 'INSERT INTO bookings (slot_id, student_id, education_level, class_size, status) VALUES (?, ?, ?, ?, "pending")';
+    db.query(sql, [slotId, studentId, education_level || 'General', class_size || 1], (error) => {
+        if (error) req.flash('error', 'Failed to book slot.');
+        else req.flash('success', 'Slot booking requested! Pending teacher approval.');
+        res.redirect('/student/my-bookings');
     });
 });
 
 app.get('/student/my-bookings', checkAuthenticated, checkStudent, (req, res) => {
-    const sql = `
-        SELECT sb.*, s.subject, s.location, s.session_date, s.session_time 
-        FROM student_bookings sb 
-        JOIN sessions s ON sb.session_id = s.session_id 
-        WHERE sb.student_id = ?
-        ORDER BY sb.booked_at DESC
-    `;
+    const sql = \`
+        SELECT b.*, ts.subject, ts.location, ts.slot_date, ts.slot_time, t.full_name as teacher_name
+        FROM bookings b
+        JOIN teacher_slots ts ON b.slot_id = ts.slot_id
+        JOIN teachers t ON ts.teacher_id = t.teacher_id
+        WHERE b.student_id = ?
+        ORDER BY b.created_at DESC
+    \`;
     db.query(sql, [req.session.user.id], (error, bookings) => {
         if (error) {
             req.flash('error', 'Could not load your bookings.');
@@ -446,11 +425,11 @@ app.get('/student/my-bookings', checkAuthenticated, checkStudent, (req, res) => 
     });
 });
 
-app.post('/student/bookings/:id/optout', checkAuthenticated, checkStudent, (req, res) => {
-    const sql = 'DELETE FROM student_bookings WHERE booking_id = ? AND student_id = ?';
+app.post('/student/bookings/:id/cancel', checkAuthenticated, checkStudent, (req, res) => {
+    const sql = 'UPDATE bookings SET status = "cancelled" WHERE booking_id = ? AND student_id = ?';
     db.query(sql, [req.params.id, req.session.user.id], (error) => {
-        if (error) req.flash('error', 'Failed to opt out.');
-        else req.flash('success', 'You have opted out of the booking.');
+        if (error) req.flash('error', 'Failed to cancel booking.');
+        else req.flash('success', 'Booking cancelled.');
         res.redirect('/student/my-bookings');
     });
 });

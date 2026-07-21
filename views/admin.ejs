@@ -15,9 +15,29 @@
         <section class='panel'><header><h2>User directory</h2><p>Registered accounts and assigned roles.</p></header>
             <% if (loadError) { %><div class='empty'><%= loadError %></div>
             <% } else if (!users.length) { %><div class='empty'>No users are registered yet.</div>
-            <% } else { %><div class='table-wrap'><table><thead><tr><th>User</th><th>Contact</th><th>Address</th><th>Role</th></tr></thead><tbody>
-                <% users.forEach(function(account) { %><tr><td><b><%= account.username %></b><small><%= account.email %></small></td><td><%= account.contact %></td><td><%= account.address %></td><td><b class='role-pill <%= account.role %>-pill'><%= account.role %></b></td></tr><% }); %>
-            </tbody></table></div><% } %>
+            <% } else { %><div class='table-wrap'>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Role</th>
+                            <th>Contact</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% users.forEach(u => { %>
+                            <tr>
+                                <td>
+                                    <b><%= u.full_name %></b>
+                                    <small><%= u.email %></small>
+                                </td>
+                                <td><span class='role-pill <%= u.role.toLowerCase() %>-pill'><%= u.role %></span></td>
+                                <td><%= u.phone_number %></td>
+                            </tr>
+                        <% }) %>
+                    </tbody>
+                </table>
+            </div><% } %>
         </section>
     </main>
 </body>
