@@ -428,6 +428,8 @@ app.post('/admin/addschedule', checkAuthenticated, checkAdmin, (req, res) => {
     });
 });
 
+// Jeriel - Read and Update schedule features //
+
 app.get('admin/schedules', checkAuthenticated, checkAdmin, (req, res) => {
     const sql = `SELECT ts.*, t.full_name as teacher_name
     FROM teacher_slots ts
@@ -471,6 +473,8 @@ app.post('admin/schedules/:id/edit', checkAuthenticated, checkAdmin, (req, res) 
         res.redirect('/admin/schedules');
     });
 });
+
+// Jeriel - Read and Update schedule features End //
 
 // --- TEACHER SLOTS ROUTES ---
 
